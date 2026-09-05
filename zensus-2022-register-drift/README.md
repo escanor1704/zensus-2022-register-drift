@@ -1,4 +1,3 @@
-cat >> README.md << 'EOF'
 
 ## Research Questions
 
@@ -15,4 +14,3 @@ Then comes the harder question: what predicts the size of that gap? Foreign-resi
 Do the Kreise with the biggest 2022 corrections show more apparent growth in the years right after, 2022 through 2025?
 
 **H2:** I'd bet yes — the most heavily corrected Kreise "grow" fastest afterward, which would point to phantom registrations quietly rebuilding rather than actual people showing up. But there's a plain-vanilla explanation sitting right next to that one: places with high turnover might just genuinely pull in more new residents, full stop. Nothing in this dataset lets me tell those two stories apart. That would take migration data, or another census point down the road.
-EOF
