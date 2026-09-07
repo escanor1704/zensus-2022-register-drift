@@ -39,6 +39,10 @@ RAW_FILES = {
         "skipfooter": 4,
         "key": ["kreis_code", "reference_date", "country_group"],
     },
+    "area": {
+        "path": RAW_DIR / "04-kreise.xlsx",
+        "key": ["kreis_code"],
+    },
 }
 
 ## the reader function for raw files
@@ -159,10 +163,26 @@ def validate_kreise(z, r):
     }
 
 
+
+def load_file(entry):
+    if entry["path"].suffix in (".xls", ".xlsx"):
+        return pd.read_excel(entry["path"], dtype=str, header=None)
+    return pd.read_csv(
+        entry["path"], sep=entry["sep"],
+        skiprows=entry.get("skiprows", 0),
+        skipfooter=entry.get("skipfooter", 0),
+        engine="python", names=entry["names"],
+        encoding=entry.get("encoding", "utf-8"), dtype=str,
+    )
+
+
+
 ## Orchestration of all functions.
 if __name__ == "__main__":
     check_files_exist()
     for name, entry in RAW_FILES.items():
+        if name == "area":
+            continue
         print_profile(name, profile_file(name, entry))
 
     z = load_file(RAW_FILES["zensus"])

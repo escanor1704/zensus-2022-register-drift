@@ -99,6 +99,33 @@ def register_long(r, zensus_codes):
     assert actual == KNOWN_GAPS, f"Gap set changed: {sorted(actual ^ KNOWN_GAPS)}"
     return out
 
+def clean_area(a, zensus_codes):
+    """Destatis 04-kreise.xlsx, Gebietsstand 31.12.2024.
+    Land rows carry 2-char codes; Land subtotals have NaN codes. Both drop
+    out when filtering to the Zensus 400."""
+    a = a.copy()
+    a.columns = [f"c{i}" for i in range(a.shape[1])]
+
+    national = float(a.loc[a.c1 == "Deutschland", "c4"].iloc[0])
+
+    out = a[a.c0.isin(zensus_codes)].copy()
+    out = out.rename(columns={"c0": "kreis_code", "c1": "kreis_type", "c4": "area_km2"})
+    out["area_km2"] = out.area_km2.astype(float)
+        # BW labels its independent cities "Stadtkreis", not "Kreisfreie Stadt".
+    CITY_TYPES = {"Kreisfreie Stadt", "Stadtkreis"}
+    out["is_city"] = out.kreis_type.str.strip().isin(CITY_TYPES)
+    assert out.is_city.sum() == 106, f"Expected 106 cities, got {out.is_city.sum()}"
+    
+    assert len(out) == 400, f"Expected 400, got {len(out)}"
+    assert set(out.kreis_code) == zensus_codes, "Code set mismatch (2024 vs 2022 boundaries)"
+
+    total = out.area_km2.sum()
+    rel = abs(total - national) / national
+    print(f"  area: {total:,.1f} km2 vs national {national:,.1f} ({rel:.4%})")
+    assert rel < 0.001, f"Area mismatch {total:,.1f} vs {national:,.1f}"
+
+    return out[["kreis_code", "area_km2", "is_city"]]
+
 
 if __name__ == "__main__":
     r = load_file(RAW_FILES["register"])
@@ -118,3 +145,6 @@ if __name__ == "__main__":
 
     rl = register_long(r, zensus_codes)
     print(f"register long: {len(rl)} rows")
+
+    ar = clean_area(load_file(RAW_FILES["area"]), zensus_codes)
+    print(f"area: {len(ar)} rows")
