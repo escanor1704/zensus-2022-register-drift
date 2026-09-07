@@ -133,12 +133,23 @@ def validate_kreise(z, r):
     rel = diff / national_total
     print(f"  sum diff: {diff:,} ({rel:.4%})")
     assert rel < 0.0002, f"Sum mismatch {diff:,} ({rel:.4%})"
-    dropped = r[~r.kreis_code.isin(zensus_codes)]
-    live_2019 = dropped[dropped.value_2019.astype(str).str.strip().str.fullmatch(r"-?\d+")]
-    if len(live_2019):
-        print(f"  dissolved rows with live value_2019: {len(live_2019)}")
-        for _, row in live_2019.iterrows():
-            print(f"    {row.kreis_code}  {row['name']}  {int(row.value_2019):,}")
+    # Dissolutions after the 2019 reference date are boundary changes inside the
+    # comparison window and require a crosswalk entry in clean.py.
+    dropped = r[~r.kreis_code.isin(zensus_codes)].copy()
+    until = dropped.name.str.extract(r"(\d{4}-\d{2}-\d{2}|b\.\d{2}\.\d{2}\.\d{4})")[0]
+    until = until.str.replace(r"^b\.(\d{2})\.(\d{2})\.(\d{4})$", r"\3-\2-\1", regex=True)
+    dropped["until_dt"] = pd.to_datetime(until, errors="coerce")
+
+    in_window = dropped[dropped.until_dt > "2019-12-31"]
+    print(f"  dissolutions after 2019-12-31: {len(in_window)}")
+    for _, row in in_window.iterrows():
+        print(f"    {row.kreis_code}  {row['name']}  value_2019={row.value_2019}")
+
+    undated = dropped[dropped.until_dt.isna()]
+    if len(undated):
+        print(f"  WARNING: {len(undated)} dissolved rows have no parseable until-date")
+        for _, row in undated.iterrows():
+            print(f"    {row.kreis_code}  {row['name']}")
     return {
         "n_current_kreise": len(zensus_codes & set(r.kreis_code)),
         "n_dissolved": len(dropped),
