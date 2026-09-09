@@ -1,6 +1,6 @@
 from pull import load_file, RAW_FILES
 from clean import harmonize_2019, clean_foreigners, clean_zensus, clean_area
-
+from clean import register_long
 
 def build(z, r, f, a, zensus_codes):
     """One row = one Kreis on 2022 boundaries."""
@@ -25,6 +25,10 @@ def build(z, r, f, a, zensus_codes):
     assert m[["zensus_2022", "register_2019", "area_km2"]].notna().all().all(), \
         "nulls in core columns"
 
+    rl = register_long(r, zensus_codes)
+    p11 = rl[rl.year == 2011].set_index("kreis_code").population
+    p19 = rl[rl.year == 2019].set_index("kreis_code").population
+    m["decline_pct"] = (m.kreis_code.map(p19) / m.kreis_code.map(p11) - 1) * 100
     # Outcome keeps register_2019 as denominator - that is the definition of drift.
     m["gap_pct"] = (m.zensus_2022 / m.register_2019 - 1) * 100
     # Predictors use zensus_2022 to avoid sharing the outcome's denominator error.
