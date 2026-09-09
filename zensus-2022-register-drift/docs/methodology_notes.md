@@ -1,86 +1,139 @@
-# Data notes
+# Methodology Notes
 
-## Stage 0 — what's actually in the raw files
+**zensus-2022-register-drift** · one row = one Kreis, 2022 boundaries, n = 400
 
-### Structure
+---
 
-| file | header rows | footer rows | rows loaded | cols |
-|---|---|---|---|---|
-| 1000A-0000_en.csv (zensus) | 0 | 3 | 401 | 6 |
-| 12411-0015_en.csv (register) | 6 | 4 | 477 | 12 |
-| 12521-0041_en.csv (foreigners) | 6 | 4 | 97,785 | 10 |
+## Findings (Q1)
 
-None of the three has a header row worth using, so column names are supplied by hand
-through `names=`. The zensus file goes straight into data on line 1 — no title block at all.
+| Hypothesis | Verdict |
+|---|---|
+| Foreign share drives drift | **Falsified.** r = +0.089, R² = 0.008, n = 390 — and the sign runs backwards. Offenbach is 42.7% foreign with a gap of −0.61% |
+| Cities drift more | **Falsified.** Density r = +0.011, log density +0.074 |
+| East drifts more | **Held.** Mann-Whitney p = 2.1×10⁻⁴, mean diff +0.894pp, CI [+0.395, +1.394] |
 
-Encoding is UTF-8 and the umlauts survive the round trip. Pinned it anyway. On a Windows
-box with a cp1252 locale the same file would decode into garbage without raising anything,
-and silent corruption is worse than a crash.
+The East/West median difference (1.28pp) exceeds the mean difference (0.89pp), so the whole distribution shifts — not a few outliers pulling an average.
 
-`skipfooter` only works with `engine="python"`. The default C engine ignores it.
+### The pooled correlation was hiding two worlds
 
-### Grain
+Population decline 2011–2019 against drift:
+pooled r = +0.198 n = 399
+within East r = +0.587 n = 75
+within West r = −0.002 n = 323
 
-- **zensus** — one Kreis per row (400 of them), plus a `DG` row for Germany. Two grains
-  in one file.
-- **register** — one Kreis per row, but wide: five reference dates (2011, 2016, 2019,
-  2022, 2025) stapled across the row as repeating value/flag pairs.
-- **foreigners** — one row per Kreis × reference date × country group. Long format,
-  the date lives in its own column.
 
-Keys: `["kreis_code"]` for zensus and register, `["kreis_code", "reference_date",
-"country_group"]` for foreigners. Checking foreigners on `kreis_code` alone reported
-97,313 duplicates. All fake — the code repeats by design, once per date and group.
+East is not merely a label for decline — if it were, decline would predict drift in the West too. And decline is not a general mechanism — it works in one region only.
 
-### Findings
+### The Western city effect
 
-**1. Mixed grain in zensus.** `DG` is Germany, 82,719,540 persons. Not a district. Kept
-aside as a reference total rather than deleted.
+Seven Western districts drift below −5.5%. Two are shrinking Landkreise (Goslar, Holzminden). Five are **growing** cities that all host universities: Köln, Trier, Landshut, Bamberg, Kempten.
 
-**2. Seventy-seven dissolved Kreise in the register.** Every one carries `(until
-YYYY-MM-DD)` in its name — `13051 Bad Doberan (until 2011-09-03)`, `14171 Annaberg
-(until 2008-07-31)`, `15151 Anhalt-Zerbst (until 2007-06-30)`. These are historical
-districts left over from state reforms, not Länder totals.
+Landshut settles it: **+14.2% population growth, −7.5% drift.** No decline mechanism produces that sign.
 
-There's no code pattern to catch them. All 477 codes are five digits, and
-`~kreis_code.str.endswith("00")` drops nothing at all. The only reliable filter is
-membership in the Zensus 400. 477 − 77 = 400, which checks out.
+Each city against its own surrounding Landkreis — same region, same labour market, same growth:
 
-**3. The values don't add up.** The 400 districts sum to 82,711,282 against a stated
-national figure of 82,719,540 — short by 8,258, or 0.0100%. Zensus 2022 runs published
-cells through Cell-Key disclosure control, which nudges individual figures, so sub-values
-aren't guaranteed to reconcile to totals. Worth flagging: perturbations of ±1 or ±2 spread
-over 400 cells shouldn't accumulate to 8,258. Something else is contributing and I haven't
-identified it.
+| | gap | growth 11–19 |
+|---|---|---|
+| Trier, Stadt | −7.89 | +4.93 |
+| Trier-Saarburg | −1.07 | +4.85 |
+| Bamberg, Stadt | −5.96 | +9.42 |
+| Bamberg, Landkreis | −0.21 | +2.38 |
 
-**4. One merger lands inside the analysis window.** Eisenach `16056` folded into
-Wartburgkreis `16063` on 2021-07-01. Of the 77 dissolved rows, exactly one still carries a
-live 2019 value — Eisenach, at 42,250.
+The city overcounts 6–8× more than the ring around it. City-specific, not regional.
 
-Wartburgkreis reads 118,974 in 2019 and 156,566 in 2022. Taken at face value that's
-**+31.6%**. Add Eisenach back into the 2019 side (118,974 + 42,250 = 161,224) and the real
-change is **−2.9%**. Wrong sign, off by 42,000 people, and it would have been the largest
-apparent drift in the dataset. This is the argument for the crosswalk.
+**The effect is demonstrated. The mechanism is not identified.** Two different claims.
 
-Göttingen and Osterode merged in 2016, before the window opens, so they cause no trouble.
+---
 
-**Blind spot.** This only catches mergers where the old code vanishes from the file. If
-territory moved between two districts that both still exist, nothing here would see it.
+## What is being measured
 
-### Still open
+Germany's population register runs on paperwork. You file when you move in and you are supposed to file when you move out. Nobody checks. People leave and stay on the list.
 
-The zensus file states no reference date anywhere in it. Its vintage is undocumented, so
-there's no proof yet that it's comparable to the register's dated columns.
+May 2022, the state ran an actual headcount. It disagreed with the register.
 
-### How correctness is checked
+gap_pct = (zensus_2022 − register_2019) / register_2019 × 100
 
-By set difference against an independent list — the Zensus 400 — not by counting rows.
-Hitting 400 proves nothing on its own, since dropping one real Kreis while keeping one
-non-Kreis also lands on 400. A set difference names the district that went missing.
 
-The sum tolerance is 0.02%: twice the observed 0.0100%, and comfortably under the
-smallest Kreis at roughly 34,000 people (0.04%). Lose a district and the assert fires.
+Negative means the register claimed people who were not there.
 
-### Design
+**Q1** — how big was the correction, and what predicts it?
+**Q2** — do corrected districts "grow" fast again, suggesting phantoms rebuild?
 
-`pull.py` reads, profiles, and asserts. It never touches a frame.
+**Baseline is 2019, not 2022**, because the 2022 register figure already contains the correction. The source file confirms it: *"From 2011: Results based on the 2011 Census. From 2022: Results based on the 2022 Census."* That line is what the whole design rests on — and it marks a series break at 2019→2022.
+
+---
+
+## Sources
+
+| File | One row = | Vintage |
+|---|---|---|
+| `1000A-0000_en.csv` | district | Zensus, 15 May 2022 |
+| `12411-0015_en.csv` | district × 5 years, wide | 2019-12-31 |
+| `12521-0041_en.csv` | district × date × country group | 2019-12-31 |
+| `04-kreise.xlsx` | district | 31.12.2024 |
+
+The area file post-dates the window, so its code set was asserted equal to the 400. It matched.
+
+---
+
+## Decisions
+
+**Eisenach crosswalk.** Eisenach (16056) merged into Wartburgkreis (16063) on 2021-07-01 — inside the window. Raw, Wartburgkreis shows +31.6% drift, the largest number in the dataset and entirely artificial. Relabelled and summed: 118,974 + 42,250 = 161,224, giving −2.9%. Verified by conservation — national total identical before and after (83,166,711), 400 rows, no duplicate codes.
+
+**Foreigners filtered, not summed.** The `country_group` categories are nested: Europe sits inside Total, EU-27 and EU-28 are two vintages of the same concept. Summing inflates unpredictably. Filtered to `Total`.
+
+**Shared denominator removed.** `gap_pct`, `foreign_pct` and `density` all originally divided by `register_2019`. An overstated register would push the outcome negative and the predictor smaller — manufacturing a correlation from nothing. Predictors now use `zensus_2022`. Note the artifact would have pushed *toward* H1, so the null survives the correction that would have flattered it.
+
+**Göttingen 2011 gap.** Long format has 1,999 rows, not 2,000. Göttingen (03159) did not exist in 2011 — created 2016-11-01. Real gap, not a reshape artifact. Not backfilled: it needs a second crosswalk entry for a year Q1 does not use.
+
+**Berlin excluded** from East/West (n = 399). The Land-code rule would call it East; most of its population is former West Berlin. Every option misrepresents it.
+
+### Rejected
+
+**Merging the Kassel and Cottbus pairs** — would recover 4 districts of foreign-share coverage, at the cost of changing the grain permanently and leaving two rows carrying double population weight. Saarland stays unrecoverable either way, so the character of the missingness does not change. *This decision was not originally made; it was dropped and only defended when the row count was questioned.*
+
+**Density over the kreisfrei flag** — argued on the grounds that turnover is continuous and legal status is frozen. Density (r = +0.011) then performed worse than the flag it replaced. Both null, so it did not matter — but the better argument produced the worse measure.
+
+**Student enrolment data** — published by university location, not `kreis_code`, needing a hand-built crosswalk that breaks on multi-campus institutions. The city/Landkreis pairs already hold region and growth constant, so a students-per-capita regression would be weaker evidence.
+
+---
+
+## Defects found
+
+| Defect | Caught by | Would have caused |
+|---|---|---|
+| Footers parsed as data | `key_lengths` showing codes far over 5 chars | Copyright text as districts |
+| Wrong key on foreigners | 97,313 false duplicates | An alarm you learn to ignore |
+| `isnull()` missing `-` markers | 0.00% null vs 15.93% non-numeric | 76 rows of `-` as valid data |
+| Dates compared as strings | `b.31.07.2008` sorts after any digit | Right answer, wrong logic |
+| Hanau has no until-date | NaN silently skipped | A row the method cannot evaluate, invisible |
+| `is_city` exact-matched one label | Stuttgart was not flagged a city | 9 BW Stadtkreise classed rural |
+| Assumed a national area constant | Used the file's own total | The planned band would have failed |
+
+Two of these generalise. **Enumerate a categorical before matching it** — `value_counts()` was run on `country_group` and skipped on district type, which cost Stuttgart. **Structure and reconciliation checks fail in different places** — a Land row with a padded 5-digit code looks exactly like a district; only the area total catches it.
+
+---
+
+## Limitations
+
+**Boundary check deferred.** Destatis's *Gebietsänderungen* record for 2020–2022 was located but not consulted. A district can gain or lose territory without dissolving, leaving no trace in the source. At 1,500 people (0.96% of the median district) contamination could exceed the median absolute gap of 1.18%. Group-level findings are protected — transfers are zero-sum — but per-district rankings carry unquantified exposure.
+
+**Ten districts lack foreign-resident data.** Seven share an immigration authority with a neighbour (five Saarland under Saarlouis, Spree-Neiße under Cottbus, Kassel Landkreis under Kassel Stadt); the three receivers were excluded as inflated. Administrative consolidation, not small-count suppression — so missingness tracks *Land*, not size or foreign share. Complete-case at n = 390, identities pinned as a set.
+
+**The university cities are a selected tail.** Found by looking at the extreme end of the outcome. The base rate across Germany's other university cities was never measured. Five of five is a pattern, not a test.
+
+**Also:** predictors mix a 2019 numerator with a 2022 denominator; COVID sits inside the window; nothing here separates phantom registrations from genuine in-migration.
+
+---
+
+## What I got wrong
+
+My headline hypothesis was falsified and the sign ran backwards. My density argument was theoretically better and empirically worse than the flag I rejected. I let the merge decision drop and had no defence for n = 400 until asked. I skipped a check I had already learned to run, which cost me Stuttgart. I deferred the boundary check rather than closing it.
+
+---
+
+## Reproduction
+python src/pull.py # profile sources, validate district universe
+python src/clean.py # harmonize boundaries, reshape, filter
+python src/join.py # build analytical table
+python src/analyze.py # tests and figures
