@@ -1,19 +1,19 @@
-from pathlib import Path   ## to read the file path
+"""Stage 1. Read raw sources, profile them, assert structural invariants.
+
+Observes only. Never modifies a frame - filtering and transformation belong
+in clean.py.
+"""
+from pathlib import Path
 import pandas as pd
 
-## path setup
-PROJECT_ROOT = Path(__file__).parent.parent  
+PROJECT_ROOT = Path(__file__).parent.parent
 RAW_DIR = PROJECT_ROOT / "data" / "raw"
-DOCS_DIR = PROJECT_ROOT / "docs"
 
-
-## configuration of the raw files to be read
 RAW_FILES = {
     "zensus": {
         "path": RAW_DIR / "1000A-0000_en.csv",
         "sep": ";",
-        "names": ['kreis_code', 'name', 'variable', 'unit', 'value', 'flag'],
-        "dtype": {'kreis_code': str},
+        "names": ["kreis_code", "name", "variable", "unit", "value", "flag"],
         "skipfooter": 3,
         "key": ["kreis_code"],
     },
@@ -24,7 +24,6 @@ RAW_FILES = {
         "names": ["kreis_code", "name", "value_2011", "flag_2011",
                   "value_2016", "flag_2016", "value_2019", "flag_2019",
                   "value_2022", "flag_2022", "value_2025", "flag_2025"],
-        "dtype": {"kreis_code": str},
         "skipfooter": 4,
         "key": ["kreis_code"],
     },
@@ -32,10 +31,9 @@ RAW_FILES = {
         "path": RAW_DIR / "12521-0041_en.csv",
         "sep": ";",
         "skiprows": 6,
-        "names": ['reference_date', 'kreis_code', 'name', 'country_group',
-                  'value_male', 'flag_male', 'value_female', 'flag_female',
-                  'value_total', 'flag_total'],
-        "dtype": {"kreis_code": str},
+        "names": ["reference_date", "kreis_code", "name", "country_group",
+                  "value_male", "flag_male", "value_female", "flag_female",
+                  "value_total", "flag_total"],
         "skipfooter": 4,
         "key": ["kreis_code", "reference_date", "country_group"],
     },
@@ -45,20 +43,26 @@ RAW_FILES = {
     },
 }
 
-## the reader function for raw files
+
 def load_file(entry):
+    """Everything as str. Numeric casting happens in clean.py, after the
+    Destatis missing-value markers ('-', '.', '/') have been identified."""
+    if entry["path"].suffix in (".xls", ".xlsx"):
+        return pd.read_excel(entry["path"], dtype=str, header=None)
     return pd.read_csv(
         entry["path"], sep=entry["sep"],
-        skiprows=entry.get("skiprows", 0),   ## use it to get rid junk rows in toprows, or else "0" to skip
-        skipfooter=entry.get("skipfooter", 0),  ## use it to get rid junk rows in bottomrows, or else "0" to skip
-        engine="python", names=entry["names"],
-        encoding=entry.get("encoding", "utf-8"), dtype=str,
+        skiprows=entry.get("skiprows", 0),
+        skipfooter=entry.get("skipfooter", 0),
+        engine="python",              # the C engine ignores skipfooter
+        names=entry["names"],
+        encoding=entry.get("encoding", "utf-8"),
+        dtype=str,
     )
 
 
 def non_numeric_rate(df):
-    """Destatis writes missing data as '-', '.', '...', '/' — strings, not NaN.
-    With dtype=str these pass isnull(). Whitelist actual numbers instead."""
+    """Destatis writes missing data as '-', '.', '...', '/'. With dtype=str
+    those pass isnull(). Whitelist actual numbers instead."""
     out = {}
     for col in df.columns:
         if col.startswith("value_") or col == "value":
@@ -67,12 +71,9 @@ def non_numeric_rate(df):
     return out
 
 
-## the measurement function for raw files
 def profile_file(name, entry):
     df = load_file(entry)
-    dup_mask = df.duplicated(subset=entry["key"], keep=False)
-
-    profile = {
+    return {
         "filename": entry["path"].name,
         "n_rows": df.shape[0],
         "n_cols": df.shape[1],
@@ -80,25 +81,21 @@ def profile_file(name, entry):
         "null_rate": df.isnull().mean().to_dict(),
         "key_lengths": df["kreis_code"].str.len().value_counts().to_dict(),
         "n_unique_keys": len(df) - df.duplicated(subset=entry["key"]).sum(),
-        "n_duplicate_keys": dup_mask.sum(),
+        "n_duplicate_keys": df.duplicated(subset=entry["key"], keep=False).sum(),
         "non_numeric_rate": non_numeric_rate(df),
     }
-    return profile
 
 
-## the guard function for checking the datasets
 def check_files_exist():
-    for name, entry in RAW_FILES.items():
+    for entry in RAW_FILES.values():
         if not entry["path"].exists():
             raise FileNotFoundError(f"File not found: {entry['path']}")
-    print("All raw files found.")
 
 
-## print the profile of raw files
 def print_profile(name, profile):
-    print(f"\n{'='*60}")
+    print(f"\n{'=' * 60}")
     print(f"  {name.upper()}  —  {profile['filename']}")
-    print(f"{'='*60}")
+    print(f"{'=' * 60}")
     print(f"  rows: {profile['n_rows']:,}    cols: {profile['n_cols']}")
     print(f"  unique keys: {int(profile['n_unique_keys']):,}"
           f"    duplicate keys: {int(profile['n_duplicate_keys']):,}")
@@ -118,27 +115,28 @@ def print_profile(name, profile):
             print(f"    {vcol:<16} {vrate:7.2%}  ({n:>6,} non-numeric)")
 
 
-## the validation function for Kreise of correctioness
 def validate_kreise(z, r):
-    """Assert structural invariants across zensus and register. Returns a report.
-    Does NOT filter — dissolved Kreise are tagged in clean.py, not dropped here."""
+    """Assert structural invariants. Returns a report, not data."""
     national_total = int(z.loc[z.kreis_code == "DG", "value"].iloc[0])
     z_kreise = z[z.kreis_code.str.len() == 5]
     zensus_codes = set(z_kreise.kreis_code)
-    filtered = r[r.kreis_code.isin(zensus_codes)].copy()
-    missing = zensus_codes - set(filtered.kreis_code)
-    assert not missing, f"Dropped real Kreise: {sorted(missing)}"
-    assert len(filtered) == 400, f"Expected 400, got {len(filtered)}"
-    # Zensus 2022 applies Cell-Key disclosure control, so district values are not
-    # guaranteed to sum to the published national total. Observed gap: 0.0100%.
-    # Tolerance 0.02% = 2x observed, and below the smallest Kreis (~34k = 0.04%),
-    # so losing a whole district still trips this assert.
+
+    present = zensus_codes & set(r.kreis_code)
+    missing = zensus_codes - set(r.kreis_code)
+    assert not missing, f"Register lacks real Kreise: {sorted(missing)}"
+    assert len(present) == 400, f"Expected 400, got {len(present)}"
+
+    # Zensus 2022 applies Cell-Key disclosure control, so district values are
+    # not guaranteed to sum to the published national total. Observed 0.0100%.
+    # Tolerance 0.02% = 2x observed, below the smallest Kreis (~34k = 0.04%),
+    # so losing a whole district still trips this.
     diff = abs(national_total - z_kreise.value.astype(int).sum())
     rel = diff / national_total
     print(f"  sum diff: {diff:,} ({rel:.4%})")
     assert rel < 0.0002, f"Sum mismatch {diff:,} ({rel:.4%})"
-    # Dissolutions after the 2019 reference date are boundary changes inside the
-    # comparison window and require a crosswalk entry in clean.py.
+
+    # Dissolutions after the 2019 reference date sit inside the comparison
+    # window and need a crosswalk entry in clean.py.
     dropped = r[~r.kreis_code.isin(zensus_codes)].copy()
     until = dropped.name.str.extract(r"(\d{4}-\d{2}-\d{2}|b\.\d{2}\.\d{2}\.\d{4})")[0]
     until = until.str.replace(r"^b\.(\d{2})\.(\d{2})\.(\d{4})$", r"\3-\2-\1", regex=True)
@@ -149,13 +147,16 @@ def validate_kreise(z, r):
     for _, row in in_window.iterrows():
         print(f"    {row.kreis_code}  {row['name']}  value_2019={row.value_2019}")
 
+    # A row with no date cannot be evaluated by a date filter. Surface it
+    # rather than letting the NaN disappear.
     undated = dropped[dropped.until_dt.isna()]
     if len(undated):
         print(f"  WARNING: {len(undated)} dissolved rows have no parseable until-date")
         for _, row in undated.iterrows():
             print(f"    {row.kreis_code}  {row['name']}")
+
     return {
-        "n_current_kreise": len(zensus_codes & set(r.kreis_code)),
+        "n_current_kreise": len(present),
         "n_dissolved": len(dropped),
         "dissolved_codes": sorted(dropped.kreis_code),
         "national_total": national_total,
@@ -163,25 +164,12 @@ def validate_kreise(z, r):
     }
 
 
-
-def load_file(entry):
-    if entry["path"].suffix in (".xls", ".xlsx"):
-        return pd.read_excel(entry["path"], dtype=str, header=None)
-    return pd.read_csv(
-        entry["path"], sep=entry["sep"],
-        skiprows=entry.get("skiprows", 0),
-        skipfooter=entry.get("skipfooter", 0),
-        engine="python", names=entry["names"],
-        encoding=entry.get("encoding", "utf-8"), dtype=str,
-    )
-
-
-
-## Orchestration of all functions.
 if __name__ == "__main__":
     check_files_exist()
+    print("All raw files found.")
+
     for name, entry in RAW_FILES.items():
-        if name == "area":
+        if name == "area":       # no kreis_code column until cleaned
             continue
         print_profile(name, profile_file(name, entry))
 
